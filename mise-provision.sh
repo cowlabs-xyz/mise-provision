@@ -6,11 +6,17 @@
 # Mise restaurant instance. Takes ~5 minutes.
 #
 # Usage:
-#   1. Create VPS in Hetzner Cloud (CPX22, Ubuntu 24.04)
-#   2. Create Telegram bot via @BotFather
-#   3. SSH into the new VPS as root
-#   4. Upload this script: scp mise-provision.sh root@<IP>:/root/
-#   5. Run: bash mise-provision.sh
+#   Interactive mode:
+#     1. Create VPS in Hetzner Cloud (CPX22, Ubuntu 24.04)
+#     2. Create Telegram bot via @BotFather
+#     3. SSH into the new VPS as root
+#     4. Upload this script: scp mise-provision.sh root@<IP>:/root/
+#     5. Run: bash mise-provision.sh
+#
+#   Non-interactive mode (from config file):
+#     bash mise-provision.sh --config restaurant.json
+#
+#   See config.example.json for the expected format.
 #
 # What it does:
 #   - Updates system & installs Node.js 22 + Chromium
@@ -84,8 +90,169 @@ if ! grep -q "Ubuntu" /etc/os-release 2>/dev/null; then
 fi
 
 # ============================================================================
-# GATHER RESTAURANT DETAILS
+# PARSE FLAGS (--config, --help)
 # ============================================================================
+
+CONFIG_FILE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config)
+            if [ -z "${2:-}" ]; then fail "--config requires a path to a JSON file."; fi
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: bash mise-provision.sh [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --config FILE   Non-interactive mode: read all inputs from a JSON config file"
+            echo "  --help, -h      Show this help message"
+            echo ""
+            echo "Interactive mode (default):"
+            echo "  Run without flags to be prompted for each value."
+            echo ""
+            echo "Config file fields:"
+            echo "  restaurant_name    (required)  Restaurant name"
+            echo "  city               (required)  City"
+            echo "  country            (required)  Country"
+            echo "  timezone           (required)  IANA timezone (e.g. Europe/Vilnius)"
+            echo "  telegram_token     (required)  Telegram bot token from @BotFather"
+            echo "  latitude                       Latitude for weather (default: 0)"
+            echo "  longitude                      Longitude for weather (default: 0)"
+            echo "  cuisine_type                   Type of cuisine"
+            echo "  typical_covers                 Covers on a busy night (default: 60)"
+            echo "  currency                       Currency code: EUR, GBP, USD, CHF (default: EUR)"
+            echo "  language                       Bot language code (default: en)"
+            echo "  ai_model                       AI model ID (default: moonshot/kimi-k2.5)"
+            echo "  telegram_username              Bot username without @ (default: mise_bot)"
+            echo "  moonshot_key                   Moonshot API key"
+            echo "  anthropic_key                  Anthropic API key"
+            echo "  brave_key                      Brave Search API key"
+            echo "  telegram_user_id               Restrict bot to this Telegram user ID"
+            echo ""
+            echo "See config.example.json for a sample config file."
+            exit 0
+            ;;
+        *)
+            fail "Unknown option: $1. Use --help for usage."
+            ;;
+    esac
+done
+
+# ============================================================================
+# NON-INTERACTIVE MODE: READ CONFIG FILE
+# ============================================================================
+
+if [ -n "$CONFIG_FILE" ]; then
+    if [ ! -f "$CONFIG_FILE" ]; then
+        fail "Config file not found: $CONFIG_FILE"
+    fi
+
+    # Ensure jq is available
+    if ! command -v jq &>/dev/null; then
+        echo "  Installing jq..."
+        apt-get update -qq >/dev/null 2>&1
+        apt-get install -y -qq jq >/dev/null 2>&1
+        if ! command -v jq &>/dev/null; then
+            fail "Failed to install jq. Install it manually: apt-get install jq"
+        fi
+        ok "jq installed"
+    fi
+
+    # Validate JSON syntax
+    if ! jq empty "$CONFIG_FILE" 2>/dev/null; then
+        fail "Invalid JSON in config file: $CONFIG_FILE"
+    fi
+
+    # Read all fields from config
+    RESTAURANT_NAME=$(jq -r '.restaurant_name // empty' "$CONFIG_FILE")
+    RESTAURANT_CITY=$(jq -r '.city // empty' "$CONFIG_FILE")
+    RESTAURANT_COUNTRY=$(jq -r '.country // empty' "$CONFIG_FILE")
+    TIMEZONE=$(jq -r '.timezone // empty' "$CONFIG_FILE")
+    TELEGRAM_TOKEN=$(jq -r '.telegram_token // empty' "$CONFIG_FILE")
+
+    LATITUDE=$(jq -r '.latitude // "0"' "$CONFIG_FILE")
+    LONGITUDE=$(jq -r '.longitude // "0"' "$CONFIG_FILE")
+    CUISINE_TYPE=$(jq -r '.cuisine_type // empty' "$CONFIG_FILE")
+    TYPICAL_COVERS=$(jq -r '.typical_covers // "60"' "$CONFIG_FILE")
+    CURRENCY=$(jq -r '.currency // "EUR"' "$CONFIG_FILE")
+    LANGUAGE=$(jq -r '.language // "en"' "$CONFIG_FILE")
+    AI_MODEL=$(jq -r '.ai_model // "moonshot/kimi-k2.5"' "$CONFIG_FILE")
+    TELEGRAM_USERNAME=$(jq -r '.telegram_username // "mise_bot"' "$CONFIG_FILE")
+    MOONSHOT_KEY=$(jq -r '.moonshot_key // empty' "$CONFIG_FILE")
+    ANTHROPIC_KEY=$(jq -r '.anthropic_key // empty' "$CONFIG_FILE")
+    BRAVE_KEY=$(jq -r '.brave_key // empty' "$CONFIG_FILE")
+    TELEGRAM_USER_ID=$(jq -r '.telegram_user_id // empty' "$CONFIG_FILE")
+
+    # Validate required fields
+    [ -z "$RESTAURANT_NAME" ] && fail "Config: 'restaurant_name' is required."
+    [ -z "$RESTAURANT_CITY" ] && fail "Config: 'city' is required."
+    [ -z "$RESTAURANT_COUNTRY" ] && fail "Config: 'country' is required."
+    [ -z "$TIMEZONE" ] && fail "Config: 'timezone' is required."
+    [ -z "$TELEGRAM_TOKEN" ] && fail "Config: 'telegram_token' is required."
+
+    # Derive currency symbol
+    case "$CURRENCY" in
+        EUR) CURRENCY_SYMBOL="€" ;;
+        GBP) CURRENCY_SYMBOL="£" ;;
+        USD) CURRENCY_SYMBOL="\$" ;;
+        CHF) CURRENCY_SYMBOL="CHF" ;;
+        *) CURRENCY_SYMBOL="$CURRENCY" ;;
+    esac
+
+    # Validate AI model has matching API key
+    case "$AI_MODEL" in
+        moonshot/*)
+            if [ -z "$MOONSHOT_KEY" ]; then fail "Config: 'moonshot_key' is required when ai_model is '$AI_MODEL'."; fi
+            ;;
+        anthropic/*)
+            if [ -z "$ANTHROPIC_KEY" ]; then fail "Config: 'anthropic_key' is required when ai_model is '$AI_MODEL'."; fi
+            ;;
+    esac
+
+    # Warnings for optional missing fields
+    if [ "$LATITUDE" = "0" ] && [ "$LONGITUDE" = "0" ]; then
+        warn "No coordinates — weather tracking will need manual setup later."
+    fi
+    if [ -z "$BRAVE_KEY" ]; then
+        warn "No Brave key — web search will be unavailable. You can add it later to /root/openclaw.env"
+    fi
+
+    ok "Config loaded from $CONFIG_FILE"
+
+    # Print summary
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}Setup Summary (from config)${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  Restaurant:  $RESTAURANT_NAME"
+    echo "  Location:    $RESTAURANT_CITY, $RESTAURANT_COUNTRY"
+    echo "  Coordinates: $LATITUDE, $LONGITUDE"
+    echo "  Cuisine:     $CUISINE_TYPE"
+    echo "  Covers:      $TYPICAL_COVERS"
+    echo "  Currency:    $CURRENCY ($CURRENCY_SYMBOL)"
+    echo "  Timezone:    $TIMEZONE"
+    echo "  Language:    $LANGUAGE"
+    echo "  AI Model:    $AI_MODEL"
+    echo "  Providers:   Moonshot $([ -n "$MOONSHOT_KEY" ] && echo '✓' || echo '✗')  Anthropic $([ -n "$ANTHROPIC_KEY" ] && echo '✓' || echo '✗')"
+    echo "  Bot:         @$TELEGRAM_USERNAME"
+    if [ -n "${TELEGRAM_USER_ID:-}" ]; then
+        echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
+    else
+        echo "  Access:      Open (anyone can DM)"
+    fi
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # Skip confirmation in config mode
+    CONFIRM="y"
+fi
+
+# ============================================================================
+# GATHER RESTAURANT DETAILS (interactive mode only)
+# ============================================================================
+
+if [ -z "$CONFIG_FILE" ]; then
 
 echo -e "${YELLOW}I need a few details about the restaurant.${NC}"
 echo ""
@@ -223,6 +390,8 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 read -p "Proceed with setup? (y/n) [y]: " CONFIRM
 if [ "${CONFIRM:-y}" != "y" ]; then echo "Aborted."; exit 0; fi
+
+fi # end interactive mode
 
 # Store setup date
 SETUP_DATE=$(date -u +%Y-%m-%d)

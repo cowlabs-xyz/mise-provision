@@ -1,0 +1,19 @@
+{
+  "restaurant_name": "Cask 215",
+  "city": "Šiauliai",
+  "country": "Lithuania",
+  "latitude": 55.93,
+  "longitude": 23.31,
+  "cuisine_type": "Gastropub",
+  "typical_covers": 80,
+  "currency": "EUR",
+  "timezone": "Europe/Vilnius",
+  "language": "en",
+  "ai_model": "moonshot/kimi-k2.5",
+  "telegram_token": "YOUR_BOT_TOKEN_FROM_BOTFATHER",
+  "telegram_username": "mise_cask215_bot",
+  "moonshot_key": "YOUR_MOONSHOT_API_KEY",
+  "anthropic_key": "YOUR_ANTHROPIC_API_KEY",
+  "brave_key": "YOUR_BRAVE_SEARCH_API_KEY",
+  "telegram_user_id": ""
+}
