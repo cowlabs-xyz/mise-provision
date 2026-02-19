@@ -12,8 +12,8 @@
   "ai_model": "moonshot/kimi-k2.5",
   "telegram_token": "YOUR_BOT_TOKEN_FROM_BOTFATHER",
   "telegram_username": "mise_cask215_bot",
-  "moonshot_key": "YOUR_MOONSHOT_API_KEY",
-  "anthropic_key": "YOUR_ANTHROPIC_API_KEY",
+  "proxy_url": "YOUR_PROXY_HOST:PORT",
+  "restaurant_token": "YOUR_RESTAURANT_TOKEN",
   "brave_key": "YOUR_BRAVE_SEARCH_API_KEY",
   "telegram_user_id": ""
 }

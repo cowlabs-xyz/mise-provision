@@ -125,8 +125,8 @@ while [[ $# -gt 0 ]]; do
             echo "  language                       Bot language code (default: en)"
             echo "  ai_model                       AI model ID (default: moonshot/kimi-k2.5)"
             echo "  telegram_username              Bot username without @ (default: mise_bot)"
-            echo "  moonshot_key                   Moonshot API key"
-            echo "  anthropic_key                  Anthropic API key"
+            echo "  proxy_url                      Proxy host (domain:port or IP:port)"
+            echo "  restaurant_token               Shared token for Moonshot+Anthropic proxy routes"
             echo "  brave_key                      Brave Search API key"
             echo "  telegram_user_id               Restrict bot to this Telegram user ID"
             echo ""
@@ -179,8 +179,8 @@ if [ -n "$CONFIG_FILE" ]; then
     LANGUAGE=$(jq -r '.language // "en"' "$CONFIG_FILE")
     AI_MODEL=$(jq -r '.ai_model // "moonshot/kimi-k2.5"' "$CONFIG_FILE")
     TELEGRAM_USERNAME=$(jq -r '.telegram_username // "mise_bot"' "$CONFIG_FILE")
-    MOONSHOT_KEY=$(jq -r '.moonshot_key // empty' "$CONFIG_FILE")
-    ANTHROPIC_KEY=$(jq -r '.anthropic_key // empty' "$CONFIG_FILE")
+    PROXY_URL=$(jq -r '.proxy_url // empty' "$CONFIG_FILE")
+    RESTAURANT_TOKEN=$(jq -r '.restaurant_token // empty' "$CONFIG_FILE")
     BRAVE_KEY=$(jq -r '.brave_key // empty' "$CONFIG_FILE")
     TELEGRAM_USER_ID=$(jq -r '.telegram_user_id // empty' "$CONFIG_FILE")
 
@@ -200,15 +200,8 @@ if [ -n "$CONFIG_FILE" ]; then
         *) CURRENCY_SYMBOL="$CURRENCY" ;;
     esac
 
-    # Validate AI model has matching API key
-    case "$AI_MODEL" in
-        moonshot/*)
-            if [ -z "$MOONSHOT_KEY" ]; then fail "Config: 'moonshot_key' is required when ai_model is '$AI_MODEL'."; fi
-            ;;
-        anthropic/*)
-            if [ -z "$ANTHROPIC_KEY" ]; then fail "Config: 'anthropic_key' is required when ai_model is '$AI_MODEL'."; fi
-            ;;
-    esac
+    [ -z "$PROXY_URL" ] && fail "Config: 'proxy_url' is required."
+    [ -z "$RESTAURANT_TOKEN" ] && fail "Config: 'restaurant_token' is required."
 
     # Warnings for optional missing fields
     if [ "$LATITUDE" = "0" ] && [ "$LONGITUDE" = "0" ]; then
@@ -234,7 +227,7 @@ if [ -n "$CONFIG_FILE" ]; then
     echo "  Timezone:    $TIMEZONE"
     echo "  Language:    $LANGUAGE"
     echo "  AI Model:    $AI_MODEL"
-    echo "  Providers:   Moonshot $([ -n "$MOONSHOT_KEY" ] && echo '✓' || echo '✗')  Anthropic $([ -n "$ANTHROPIC_KEY" ] && echo '✓' || echo '✗')"
+    echo "  Providers:   Moonshot+Anthropic via proxy ($PROXY_URL)"
     echo "  Bot:         @$TELEGRAM_USERNAME"
     if [ -n "${TELEGRAM_USER_ID:-}" ]; then
         echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
@@ -336,22 +329,14 @@ if [ -z "$TELEGRAM_TOKEN" ]; then fail "Telegram bot token is required."; fi
 read -p "Telegram bot username (without @, e.g. mise_cask215_bot): " TELEGRAM_USERNAME
 TELEGRAM_USERNAME=${TELEGRAM_USERNAME:-mise_bot}
 
-# Always collect both API keys (dual-provider setup like Cask 215)
-read -sp "Moonshot API key (from platform.moonshot.ai, hidden — press Enter to skip): " MOONSHOT_KEY
+# Collect proxy credentials (single token routes both providers)
+read -p "AI proxy URL (host:port or domain:port, e.g. 127.0.0.1:8080): " PROXY_URL
+if [ -z "$PROXY_URL" ]; then fail "AI proxy URL is required."; fi
 echo ""
 
-read -sp "Anthropic API key (hidden — press Enter to skip): " ANTHROPIC_KEY
+read -sp "Restaurant token for AI proxy (hidden): " RESTAURANT_TOKEN
+if [ -z "$RESTAURANT_TOKEN" ]; then fail "Restaurant token is required."; fi
 echo ""
-
-# Validate: at least one key must match the primary model
-case "$AI_MODEL" in
-    moonshot/*)
-        if [ -z "$MOONSHOT_KEY" ]; then fail "Moonshot API key is required for Kimi model."; fi
-        ;;
-    anthropic/*)
-        if [ -z "$ANTHROPIC_KEY" ]; then fail "Anthropic API key is required for Claude model."; fi
-        ;;
-esac
 
 # Brave Search API key
 read -sp "Brave Search API key (hidden, from brave.com/search/api): " BRAVE_KEY
@@ -379,7 +364,7 @@ echo "  Currency:    $CURRENCY ($CURRENCY_SYMBOL)"
 echo "  Timezone:    $TIMEZONE"
 echo "  Language:    $LANGUAGE"
 echo "  AI Model:    $AI_MODEL"
-echo "  Providers:   Moonshot $([ -n "$MOONSHOT_KEY" ] && echo '✓' || echo '✗')  Anthropic $([ -n "$ANTHROPIC_KEY" ] && echo '✓' || echo '✗')"
+echo "  Providers:   Moonshot+Anthropic via proxy ($PROXY_URL)"
 echo "  Bot:         @$TELEGRAM_USERNAME"
 if [ -n "${TELEGRAM_USER_ID:-}" ]; then
     echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
@@ -1115,8 +1100,6 @@ step "Generating gateway token and creating environment file"
 GATEWAY_TOKEN=$(openssl rand -hex 32)
 
 cat > /root/openclaw.env << ENVEOF
-ANTHROPIC_API_KEY=${ANTHROPIC_KEY:-}
-MOONSHOT_API_KEY=${MOONSHOT_KEY:-}
 TELEGRAM_BOT_TOKEN=${TELEGRAM_TOKEN}
 OPENCLAW_GATEWAY_TOKEN=$GATEWAY_TOKEN
 BRAVE_API_KEY=${BRAVE_KEY:-}
@@ -1135,8 +1118,7 @@ else
     DM_POLICY="open"
 fi
 
-# Build models provider block — dual provider like Cask 215
-# Always include both providers when keys are available
+# Build models provider block — always route through restaurant proxy
 python3 << PYEOF
 import json
 
@@ -1207,16 +1189,14 @@ config = {
     }
 }
 
-# Build providers — include all available
-providers = {}
+proxy_input = "${PROXY_URL:-}"
+proxy_host = proxy_input.replace("http://", "").replace("https://", "").rstrip("/")
+restaurant_token = "${RESTAURANT_TOKEN:-}"
 
-moonshot_key = "${MOONSHOT_KEY:-}"
-anthropic_key = "${ANTHROPIC_KEY:-}"
-
-if moonshot_key:
-    providers["moonshot"] = {
-        "baseUrl": "https://api.moonshot.ai/v1",
-        "apiKey": moonshot_key,
+providers = {
+    "moonshot": {
+        "baseUrl": f"http://{proxy_host}/moonshot/v1",
+        "apiKey": restaurant_token,
         "api": "openai-completions",
         "models": [
             {
@@ -1226,12 +1206,10 @@ if moonshot_key:
                 "maxTokens": 8192
             }
         ]
-    }
-
-if anthropic_key:
-    providers["anthropic"] = {
-        "baseUrl": "https://api.anthropic.com",
-        "apiKey": anthropic_key,
+    },
+    "anthropic": {
+        "baseUrl": f"http://{proxy_host}/anthropic/v1",
+        "apiKey": restaurant_token,
         "api": "anthropic-messages",
         "models": [
             {
@@ -1242,12 +1220,12 @@ if anthropic_key:
             }
         ]
     }
+}
 
-if providers:
-    config["models"] = {
-        "mode": "merge",
-        "providers": providers
-    }
+config["models"] = {
+    "mode": "merge",
+    "providers": providers
+}
 
 with open('/home/mise/.openclaw/openclaw.json', 'w') as f:
     json.dump(config, f, indent=2)
@@ -1411,12 +1389,7 @@ echo "  Next steps:"
 echo "  1. Open Telegram and send a message to @$TELEGRAM_USERNAME"
 echo "     (First message takes 10-15 seconds — it reads all workspace files)"
 echo "  2. Monitor token usage:"
-if [ -n "${MOONSHOT_KEY:-}" ]; then
-    echo "     Moonshot: https://platform.moonshot.ai"
-fi
-if [ -n "${ANTHROPIC_KEY:-}" ]; then
-    echo "     Anthropic: https://console.anthropic.com"
-fi
+echo "     AI proxy: $PROXY_URL (Moonshot + Anthropic routed by path)"
 echo "  3. Morning briefings will start tomorrow at 8 AM $TIMEZONE"
 echo ""
 echo "  Quick reference:"
