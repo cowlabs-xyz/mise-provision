@@ -1117,7 +1117,7 @@ config = {
     "agents": {
         "defaults": {
             "model": {
-                "primary": "$AI_MODEL"
+                "primary": "openrouter/moonshotai/kimi-k2.5"
             },
             "workspace": "/home/mise/openclaw/workspace",
             "heartbeat": {
