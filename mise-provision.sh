@@ -1306,13 +1306,14 @@ CRON_OUTPUT=$(su - mise -c "$OC_BIN cron add \
   --tz '$TIMEZONE' \
   --session isolated \
   --message 'Morning briefing please' \
+  --model 'openrouter/anthropic/claude-sonnet-4-5-20250929' \
   --token '$TOKEN'" 2>&1) || true
 
 if echo "$CRON_OUTPUT" | grep -q '"enabled"'; then
     ok "Morning briefing scheduled at 8 AM $TIMEZONE"
 else
     warn "Cron job may not have been added. You can add it manually later:"
-    echo "  su - mise -c \"$OC_BIN cron add --name 'Morning Briefing' --cron '0 8 * * *' --tz '$TIMEZONE' --session isolated --message 'Morning briefing please' --token '\$TOKEN'\""
+    echo "  su - mise -c \"$OC_BIN cron add --name 'Morning Briefing' --cron '0 8 * * *' --tz '$TIMEZONE' --session isolated --message 'Morning briefing please' --model 'openrouter/anthropic/claude-sonnet-4-5-20250929' --token '\$TOKEN'\""
 fi
 
 # ============================================================================
