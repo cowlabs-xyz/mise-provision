@@ -123,10 +123,9 @@ while [[ $# -gt 0 ]]; do
             echo "  typical_covers                 Covers on a busy night (default: 60)"
             echo "  currency                       Currency code: EUR, GBP, USD, CHF (default: EUR)"
             echo "  language                       Bot language code (default: en)"
-            echo "  ai_model                       AI model ID (default: moonshot/kimi-k2.5)"
+            echo "  ai_model                       AI model ID (default: openrouter/moonshotai/kimi-k2.5)"
             echo "  telegram_username              Bot username without @ (default: mise_bot)"
-            echo "  proxy_url                      Proxy host (domain:port or IP:port)"
-            echo "  restaurant_token               Shared token for Moonshot+Anthropic proxy routes"
+            echo "  openrouter_api_key             OpenRouter API key"
             echo "  brave_key                      Brave Search API key"
             echo "  telegram_user_id               Restrict bot to this Telegram user ID"
             echo ""
@@ -177,10 +176,9 @@ if [ -n "$CONFIG_FILE" ]; then
     TYPICAL_COVERS=$(jq -r '.typical_covers // "60"' "$CONFIG_FILE")
     CURRENCY=$(jq -r '.currency // "EUR"' "$CONFIG_FILE")
     LANGUAGE=$(jq -r '.language // "en"' "$CONFIG_FILE")
-    AI_MODEL=$(jq -r '.ai_model // "moonshot/kimi-k2.5"' "$CONFIG_FILE")
+    AI_MODEL=$(jq -r '.ai_model // "openrouter/moonshotai/kimi-k2.5"' "$CONFIG_FILE")
     TELEGRAM_USERNAME=$(jq -r '.telegram_username // "mise_bot"' "$CONFIG_FILE")
-    PROXY_URL=$(jq -r '.proxy_url // empty' "$CONFIG_FILE")
-    RESTAURANT_TOKEN=$(jq -r '.restaurant_token // empty' "$CONFIG_FILE")
+    OPENROUTER_API_KEY=$(jq -r '.openrouter_api_key // empty' "$CONFIG_FILE")
     BRAVE_KEY=$(jq -r '.brave_key // empty' "$CONFIG_FILE")
     TELEGRAM_USER_ID=$(jq -r '.telegram_user_id // empty' "$CONFIG_FILE")
 
@@ -199,9 +197,6 @@ if [ -n "$CONFIG_FILE" ]; then
         CHF) CURRENCY_SYMBOL="CHF" ;;
         *) CURRENCY_SYMBOL="$CURRENCY" ;;
     esac
-
-    [ -z "$PROXY_URL" ] && fail "Config: 'proxy_url' is required."
-    [ -z "$RESTAURANT_TOKEN" ] && fail "Config: 'restaurant_token' is required."
 
     # Warnings for optional missing fields
     if [ "$LATITUDE" = "0" ] && [ "$LONGITUDE" = "0" ]; then
@@ -227,7 +222,7 @@ if [ -n "$CONFIG_FILE" ]; then
     echo "  Timezone:    $TIMEZONE"
     echo "  Language:    $LANGUAGE"
     echo "  AI Model:    $AI_MODEL"
-    echo "  Providers:   Moonshot+Anthropic via proxy ($PROXY_URL)"
+    echo "  AI Provider: OpenRouter (spending limit enforced)"
     echo "  Bot:         @$TELEGRAM_USERNAME"
     if [ -n "${TELEGRAM_USER_ID:-}" ]; then
         echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
@@ -310,11 +305,11 @@ echo "  3) claude-opus-4-6       — Most capable, highest cost"
 echo "  4) claude-haiku-4-5      — Fastest, lowest cost"
 read -p "Choose primary model [1]: " MODEL_CHOICE
 case "${MODEL_CHOICE:-1}" in
-    1) AI_MODEL="moonshot/kimi-k2.5" ;;
-    2) AI_MODEL="anthropic/claude-sonnet-4-5-20250929" ;;
-    3) AI_MODEL="anthropic/claude-opus-4-6" ;;
-    4) AI_MODEL="anthropic/claude-haiku-4-5-20251001" ;;
-    *) AI_MODEL="moonshot/kimi-k2.5"; warn "Invalid choice. Defaulting to Kimi K2.5." ;;
+    1) AI_MODEL="openrouter/moonshotai/kimi-k2.5" ;;
+    2) AI_MODEL="openrouter/anthropic/claude-sonnet-4-5-20250929" ;;
+    3) AI_MODEL="openrouter/anthropic/claude-opus-4-6" ;;
+    4) AI_MODEL="openrouter/anthropic/claude-haiku-4-5-20251001" ;;
+    *) AI_MODEL="openrouter/moonshotai/kimi-k2.5" ;;
 esac
 
 echo ""
@@ -329,14 +324,10 @@ if [ -z "$TELEGRAM_TOKEN" ]; then fail "Telegram bot token is required."; fi
 read -p "Telegram bot username (without @, e.g. mise_cask215_bot): " TELEGRAM_USERNAME
 TELEGRAM_USERNAME=${TELEGRAM_USERNAME:-mise_bot}
 
-# Collect proxy credentials (single token routes both providers)
-read -p "AI proxy URL (host:port or domain:port, e.g. 127.0.0.1:8080): " PROXY_URL
-if [ -z "$PROXY_URL" ]; then fail "AI proxy URL is required."; fi
+# OpenRouter API key
+read -sp "OpenRouter API key (hidden): " OPENROUTER_API_KEY
 echo ""
-
-read -sp "Restaurant token for AI proxy (hidden): " RESTAURANT_TOKEN
-if [ -z "$RESTAURANT_TOKEN" ]; then fail "Restaurant token is required."; fi
-echo ""
+if [ -z "$OPENROUTER_API_KEY" ]; then fail "OpenRouter API key is required."; fi
 
 # Brave Search API key
 read -sp "Brave Search API key (hidden, from brave.com/search/api): " BRAVE_KEY
@@ -364,7 +355,7 @@ echo "  Currency:    $CURRENCY ($CURRENCY_SYMBOL)"
 echo "  Timezone:    $TIMEZONE"
 echo "  Language:    $LANGUAGE"
 echo "  AI Model:    $AI_MODEL"
-echo "  Providers:   Moonshot+Anthropic via proxy ($PROXY_URL)"
+echo "  AI Provider: OpenRouter (spending limit enforced)"
 echo "  Bot:         @$TELEGRAM_USERNAME"
 if [ -n "${TELEGRAM_USER_ID:-}" ]; then
     echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
@@ -1118,7 +1109,7 @@ else
     DM_POLICY="open"
 fi
 
-# Build models provider block — always route through restaurant proxy
+# Build models provider block — OpenRouter only
 python3 << PYEOF
 import json
 
@@ -1189,31 +1180,22 @@ config = {
     }
 }
 
-proxy_input = "${PROXY_URL:-}"
-proxy_host = proxy_input.replace("http://", "").replace("https://", "").rstrip("/")
-restaurant_token = "${RESTAURANT_TOKEN:-}"
+openrouter_key = "${OPENROUTER_API_KEY:-}"
 
 providers = {
-    "moonshot": {
-        "baseUrl": f"http://{proxy_host}/moonshot/v1",
-        "apiKey": restaurant_token,
+    "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKey": openrouter_key,
         "api": "openai-completions",
         "models": [
             {
-                "id": "kimi-k2.5",
+                "id": "moonshotai/kimi-k2.5",
                 "name": "Kimi K2.5",
                 "contextWindow": 256000,
                 "maxTokens": 8192
-            }
-        ]
-    },
-    "anthropic": {
-        "baseUrl": f"http://{proxy_host}/anthropic/v1",
-        "apiKey": restaurant_token,
-        "api": "anthropic-messages",
-        "models": [
+            },
             {
-                "id": "claude-sonnet-4-5-20250929",
+                "id": "anthropic/claude-sonnet-4-5-20250929",
                 "name": "Claude Sonnet 4.5",
                 "contextWindow": 200000,
                 "maxTokens": 8192
@@ -1388,8 +1370,7 @@ echo ""
 echo "  Next steps:"
 echo "  1. Open Telegram and send a message to @$TELEGRAM_USERNAME"
 echo "     (First message takes 10-15 seconds — it reads all workspace files)"
-echo "  2. Monitor token usage:"
-echo "     AI proxy: $PROXY_URL (Moonshot + Anthropic routed by path)"
+echo "  2. Monitor AI usage: https://openrouter.ai/activity"
 echo "  3. Morning briefings will start tomorrow at 8 AM $TIMEZONE"
 echo ""
 echo "  Quick reference:"
