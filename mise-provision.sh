@@ -1297,10 +1297,16 @@ fi
 step "Adding morning briefing cron job (8 AM $TIMEZONE)"
 TOKEN=$(grep OPENCLAW_GATEWAY_TOKEN /root/openclaw.env | cut -d= -f2)
 
-# Small delay to make sure gateway is fully ready
-sleep 5
+# Give OpenClaw gateway extra time to become ready
+echo "  Waiting for OpenClaw gateway to be ready..."
+sleep 15
 
-CRON_OUTPUT=$(su - mise -c "$OC_BIN cron add \
+CRON_ADDED=false
+CRON_OUTPUT=""
+
+for ATTEMPT in 1 2 3; do
+    echo "  Adding morning briefing cron job (attempt $ATTEMPT/3)..."
+    CRON_OUTPUT=$(su - mise -c "$OC_BIN cron add \
   --name 'Morning Briefing' \
   --cron '0 8 * * *' \
   --tz '$TIMEZONE' \
@@ -1309,10 +1315,21 @@ CRON_OUTPUT=$(su - mise -c "$OC_BIN cron add \
   --model 'openrouter/anthropic/claude-sonnet-4-5-20250929' \
   --token '$TOKEN'" 2>&1) || true
 
-if echo "$CRON_OUTPUT" | grep -q '"enabled"'; then
+    if echo "$CRON_OUTPUT" | grep -q '"enabled"'; then
+        CRON_ADDED=true
+        break
+    fi
+
+    if [ "$ATTEMPT" -lt 3 ]; then
+        warn "Cron add failed (attempt $ATTEMPT/3). Retrying in 10 seconds..."
+        sleep 10
+    fi
+done
+
+if [ "$CRON_ADDED" = true ]; then
     ok "Morning briefing scheduled at 8 AM $TIMEZONE"
 else
-    warn "Cron job may not have been added. You can add it manually later:"
+    warn "Cron job may not have been added after 3 attempts. You can add it manually later:"
     echo "  su - mise -c \"$OC_BIN cron add --name 'Morning Briefing' --cron '0 8 * * *' --tz '$TIMEZONE' --session isolated --message 'Morning briefing please' --model 'openrouter/anthropic/claude-sonnet-4-5-20250929' --token '\$TOKEN'\""
 fi
 
