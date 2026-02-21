@@ -415,7 +415,7 @@ else
 fi
 
 # Also ensure we have python3 (for config generation)
-apt-get install -y -qq python3 >/dev/null 2>&1
+apt-get install -y -qq python3 build-essential >/dev/null 2>&1
 
 step "Installing Chromium (for PDF generation)"
 if command -v chromium-browser &>/dev/null || command -v chromium &>/dev/null; then
