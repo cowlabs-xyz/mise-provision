@@ -372,12 +372,35 @@ fi # end interactive mode
 # Store setup date
 SETUP_DATE=$(date -u +%Y-%m-%d)
 
+# Make apt non-interactive from this point onward
+export DEBIAN_FRONTEND=noninteractive
+
+# Stop/disable unattended upgrades (ignore if service not present)
+systemctl stop unattended-upgrades 2>/dev/null || true
+systemctl disable unattended-upgrades 2>/dev/null || true
+
+# Wait up to 60s for apt/dpkg frontend lock to be released
+LOCK_FILE="/var/lib/dpkg/lock-frontend"
+WAITED=0
+while fuser "$LOCK_FILE" >/dev/null 2>&1; do
+    if [ "$WAITED" -eq 0 ]; then
+        warn "Waiting for apt/dpkg lock to be released..."
+    fi
+    sleep 1
+    WAITED=$((WAITED + 1))
+    if [ "$WAITED" -ge 60 ]; then
+        fail "Timed out waiting for apt/dpkg lock: $LOCK_FILE"
+    fi
+done
+if [ "$WAITED" -gt 0 ]; then
+    ok "apt/dpkg lock released after ${WAITED}s"
+fi
+
 # ============================================================================
 # PHASE 1: SYSTEM SETUP
 # ============================================================================
 
 step "Updating system packages"
-export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get upgrade -y -qq
 ok "System updated"
