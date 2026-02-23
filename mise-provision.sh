@@ -47,7 +47,7 @@ NC='\033[0m' # No Color
 
 # Counters
 STEP=0
-TOTAL_STEPS=19
+TOTAL_STEPS=20
 
 step() {
     STEP=$((STEP + 1))
@@ -94,6 +94,8 @@ fi
 # ============================================================================
 
 CONFIG_FILE=""
+AGENTMAIL_INBOX=""
+AGENTMAIL_API_KEY=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --config)
@@ -128,6 +130,8 @@ while [[ $# -gt 0 ]]; do
             echo "  openrouter_api_key             OpenRouter API key"
             echo "  brave_key                      Brave Search API key"
             echo "  telegram_user_id               Restrict bot to this Telegram user ID"
+            echo "  agentmail_inbox                AgentMail inbox/email address"
+            echo "  agentmail_api_key              AgentMail API key"
             echo ""
             echo "See config.example.json for a sample config file."
             exit 0
@@ -181,6 +185,8 @@ if [ -n "$CONFIG_FILE" ]; then
     OPENROUTER_API_KEY=$(jq -r '.openrouter_api_key // empty' "$CONFIG_FILE")
     BRAVE_KEY=$(jq -r '.brave_key // empty' "$CONFIG_FILE")
     TELEGRAM_USER_ID=$(jq -r '.telegram_user_id // empty' "$CONFIG_FILE")
+    AGENTMAIL_INBOX=$(jq -r '.agentmail_inbox // ""' "$CONFIG_FILE")
+    AGENTMAIL_API_KEY=$(jq -r '.agentmail_api_key // ""' "$CONFIG_FILE")
 
     # Validate required fields
     [ -z "$RESTAURANT_NAME" ] && fail "Config: 'restaurant_name' is required."
@@ -228,6 +234,9 @@ if [ -n "$CONFIG_FILE" ]; then
         echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
     else
         echo "  Access:      Open (anyone can DM)"
+    fi
+    if [ -n "$AGENTMAIL_INBOX" ] && [ "$AGENTMAIL_INBOX" != "" ]; then
+        echo "  Email:       $AGENTMAIL_INBOX"
     fi
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
@@ -361,6 +370,9 @@ if [ -n "${TELEGRAM_USER_ID:-}" ]; then
     echo "  Restricted:  User ID $TELEGRAM_USER_ID only"
 else
     echo "  Access:      Open (anyone can DM)"
+fi
+if [ -n "$AGENTMAIL_INBOX" ] && [ "$AGENTMAIL_INBOX" != "" ]; then
+    echo "  Email:       $AGENTMAIL_INBOX"
 fi
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
@@ -1030,6 +1042,93 @@ IDEOF
 
 ok "Workspace files deployed (SOUL, SKILL, HEARTBEAT, AGENTS, CLAUDE, TOOLS, USER, MEMORY, IDENTITY)"
 
+step "Setting up AgentMail email skill"
+if [ -n "$AGENTMAIL_INBOX" ] && [ "$AGENTMAIL_INBOX" != "" ]; then
+    mkdir -p /home/mise/openclaw/workspace/skills/agentmail
+
+    cat > /home/mise/openclaw/workspace/skills/agentmail/SKILL.md << 'AMEOF'
+---
+name: agentmail
+description: Send, receive, and manage emails for the restaurant. Use this skill when asked to check emails, send emails, reply to emails, or process incoming invoices and supplier communications.
+requires:
+  env:
+    - AGENTMAIL_API_KEY
+---
+
+# Email Skill (AgentMail)
+
+You have access to a dedicated restaurant email inbox. Use this to receive supplier invoices, send emails on behalf of the restaurant, and manage email communications.
+
+## Your Email Address
+
+Check the restaurant.json file for the restaurant's email address in the "email" field.
+
+## API Base URL
+
+All requests go to: https://api.agentmail.to/v0
+
+## Authentication
+
+All requests need this header:
+Authorization: Bearer $AGENTMAIL_API_KEY
+
+## Check for New Emails
+```bash
+curl -s -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
+  "https://api.agentmail.to/v0/inboxes/INBOX_ID/messages?limit=10"
+```
+
+Replace INBOX_ID with the restaurant's email address from restaurant.json.
+
+## Read a Specific Email
+```bash
+curl -s -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
+  "https://api.agentmail.to/v0/inboxes/INBOX_ID/messages/MESSAGE_ID"
+```
+
+## Send an Email
+```bash
+curl -s -X POST -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": ["recipient@example.com"],
+    "subject": "Subject line",
+    "text": "Plain text body",
+    "html": "<p>HTML body</p>"
+  }' \
+  "https://api.agentmail.to/v0/inboxes/INBOX_ID/messages"
+```
+
+Always include both text and html for best deliverability.
+
+## Reply to an Email
+```bash
+curl -s -X POST -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Reply text here"}' \
+  "https://api.agentmail.to/v0/inboxes/INBOX_ID/messages/MESSAGE_ID/reply"
+```
+
+## List Email Threads
+```bash
+curl -s -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
+  "https://api.agentmail.to/v0/inboxes/INBOX_ID/threads"
+```
+
+## Important Guidelines
+
+- When sending emails on behalf of the restaurant, be professional and friendly
+- Always confirm with the owner before emailing new contacts for the first time
+- When you receive supplier invoices or important emails, summarise them and notify the owner via Telegram
+- Process PDF attachments from supplier invoices when possible
+- During heartbeat check-ins, check for new emails and report anything important
+AMEOF
+
+    ok "AgentMail skill deployed ($AGENTMAIL_INBOX)"
+else
+    warn "No AgentMail inbox configured, skipping email skill"
+fi
+
 step "Installing weather skill"
 mkdir -p /home/mise/openclaw/skills/weather
 cat > /home/mise/openclaw/skills/weather/SKILL.md << 'WSEOF'
@@ -1100,6 +1199,7 @@ cat > /home/mise/openclaw/workspace/mise-data/restaurant.json << RJEOF
   "setupDate": "$SETUP_DATE",
   "city": "$RESTAURANT_CITY",
   "country": "$RESTAURANT_COUNTRY",
+  "email": "$AGENTMAIL_INBOX",
   "latitude": $LATITUDE,
   "longitude": $LONGITUDE
 }
@@ -1118,6 +1218,9 @@ TELEGRAM_BOT_TOKEN=${TELEGRAM_TOKEN}
 OPENCLAW_GATEWAY_TOKEN=$GATEWAY_TOKEN
 BRAVE_API_KEY=${BRAVE_KEY:-}
 ENVEOF
+if [ -n "$AGENTMAIL_API_KEY" ] && [ "$AGENTMAIL_API_KEY" != "" ]; then
+    echo "AGENTMAIL_API_KEY=$AGENTMAIL_API_KEY" >> /root/openclaw.env
+fi
 chmod 600 /root/openclaw.env
 ok "Environment file created at /root/openclaw.env"
 
@@ -1132,111 +1235,117 @@ else
     DM_POLICY="open"
 fi
 
-# Build models provider block — OpenRouter only
-python3 << PYEOF
-import json
-
-config = {
-    "agents": {
-        "defaults": {
-            "model": {
-                "primary": "openrouter/moonshotai/kimi-k2.5"
-            },
-            "workspace": "/home/mise/openclaw/workspace",
-            "heartbeat": {
-                "every": "1h",
-                "activeHours": {
-                    "start": "07:00",
-                    "end": "23:00"
-                },
-                "target": "last"
-            },
-            "maxConcurrent": 4,
-            "subagents": {
-                "maxConcurrent": 8
-            }
-        },
-        "list": [
-            {
-                "id": "main",
-                "name": "Mise"
-            }
-        ]
-    },
-    "tools": {
-        "deny": [
-            "exec",
-            "group:runtime",
-            "group:nodes",
-            "group:sessions"
-        ]
-    },
-    "messages": {
-        "ackReactionScope": "group-mentions"
-    },
-    "commands": {
-        "native": "auto",
-        "nativeSkills": "auto"
-    },
-    "channels": {
-        "telegram": {
-            "enabled": True,
-            "dmPolicy": "$DM_POLICY",
-            "botToken": "$TELEGRAM_TOKEN",
-            "allowFrom": json.loads('$ALLOW_FROM'),
-            "groupPolicy": "allowlist",
-            "streamMode": "partial"
+# Build optional skills block (only when AgentMail key is configured)
+OPENCLAW_SKILLS_BLOCK=""
+if [ -n "$AGENTMAIL_API_KEY" ] && [ "$AGENTMAIL_API_KEY" != "" ]; then
+    OPENCLAW_SKILLS_BLOCK=$(cat << OCSKILLSEOF
+,
+  "skills": {
+    "entries": {
+      "agentmail": {
+        "enabled": true,
+        "env": {
+          "AGENTMAIL_API_KEY": "$AGENTMAIL_API_KEY"
         }
-    },
-    "gateway": {
-        "mode": "local",
-        "auth": {
-            "token": "$GATEWAY_TOKEN"
-        }
-    },
-    "plugins": {
-        "entries": {
-            "telegram": {
-                "enabled": True
-            }
-        }
+      }
     }
-}
+  }
+OCSKILLSEOF
+)
+fi
 
-openrouter_key = "${OPENROUTER_API_KEY:-}"
-
-providers = {
-    "openrouter": {
+cat > /home/mise/.openclaw/openclaw.json << OCEOF
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/moonshotai/kimi-k2.5"
+      },
+      "workspace": "/home/mise/openclaw/workspace",
+      "heartbeat": {
+        "every": "1h",
+        "activeHours": {
+          "start": "07:00",
+          "end": "23:00"
+        },
+        "target": "last"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "name": "Mise"
+      }
+    ]
+  },
+  "tools": {
+    "deny": [
+      "exec",
+      "group:runtime",
+      "group:nodes",
+      "group:sessions"
+    ]
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "$DM_POLICY",
+      "botToken": "$TELEGRAM_TOKEN",
+      "allowFrom": $ALLOW_FROM,
+      "groupPolicy": "allowlist",
+      "streamMode": "partial"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "token": "$GATEWAY_TOKEN"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openrouter": {
         "baseUrl": "https://openrouter.ai/api/v1",
-        "apiKey": openrouter_key,
+        "apiKey": "${OPENROUTER_API_KEY:-}",
         "api": "openai-completions",
         "models": [
-            {
-                "id": "moonshotai/kimi-k2.5",
-                "name": "Kimi K2.5",
-                "contextWindow": 256000,
-                "maxTokens": 8192
-            },
-            {
-                "id": "anthropic/claude-sonnet-4-5-20250929",
-                "name": "Claude Sonnet 4.5",
-                "contextWindow": 200000,
-                "maxTokens": 8192
-            }
+          {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "Kimi K2.5",
+            "contextWindow": 256000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "anthropic/claude-sonnet-4-5-20250929",
+            "name": "Claude Sonnet 4.5",
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
         ]
+      }
     }
+  }${OPENCLAW_SKILLS_BLOCK}
 }
-
-config["models"] = {
-    "mode": "merge",
-    "providers": providers
-}
-
-with open('/home/mise/.openclaw/openclaw.json', 'w') as f:
-    json.dump(config, f, indent=2)
-
-print("openclaw.json written with providers: " + ", ".join(providers.keys()))
-PYEOF
+OCEOF
 ok "openclaw.json configured"
 
 # ============================================================================
