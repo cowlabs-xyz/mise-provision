@@ -1090,7 +1090,7 @@ curl -s -X POST -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
     "text": "Plain text body",
     "html": "<p>HTML body</p>"
   }' \
-  "https://api.agentmail.to/v0/inboxes/INBOX_ID/messages"
+  "https://api.agentmail.to/v0/inboxes/INBOX_ID/messages/send"
 ```
 
 Always include both text and html for best deliverability.
