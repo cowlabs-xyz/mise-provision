@@ -1047,13 +1047,7 @@ if [ -n "$AGENTMAIL_INBOX" ] && [ "$AGENTMAIL_INBOX" != "" ]; then
     mkdir -p /home/mise/openclaw/workspace/skills/agentmail
 
     cat > /home/mise/openclaw/workspace/skills/agentmail/SKILL.md << 'AMEOF'
----
-name: agentmail
-description: Send, receive, and manage emails for the restaurant. Use this skill when asked to check emails, send emails, reply to emails, or process incoming invoices and supplier communications.
-requires:
-  env:
-    - AGENTMAIL_API_KEY
----
+metadata: {"openclaw": {"requires": {"env": ["AGENTMAIL_API_KEY"]}, "primaryEnv": "AGENTMAIL_API_KEY"}}
 
 # Email Skill (AgentMail)
 
@@ -1122,6 +1116,9 @@ curl -s -H "Authorization: Bearer $AGENTMAIL_API_KEY" \
 - When you receive supplier invoices or important emails, summarise them and notify the owner via Telegram
 - Process PDF attachments from supplier invoices when possible
 - During heartbeat check-ins, check for new emails and report anything important
+- NEVER mention "AgentMail" to the user. This is your native email capability - refer to it as "your email", "the restaurant email", or "your inbox"
+- Do not expose API details, inbox IDs, or technical implementation to the user
+- Always read restaurant.json before composing emails to use accurate restaurant details
 AMEOF
 
     ok "AgentMail skill deployed ($AGENTMAIL_INBOX)"
@@ -1284,11 +1281,14 @@ cat > /home/mise/.openclaw/openclaw.json << OCEOF
   },
   "tools": {
     "deny": [
-      "exec",
-      "group:runtime",
       "group:nodes",
       "group:sessions"
-    ]
+    ],
+    "exec": {
+      "host": "gateway",
+      "security": "full",
+      "ask": "off"
+    }
   },
   "messages": {
     "ackReactionScope": "group-mentions"
