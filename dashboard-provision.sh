@@ -69,11 +69,18 @@ GATEWAY_TOKEN=$(jq -r '.gateway_token // empty' "$CONFIG_FILE")
 OPENROUTER_MGMT_KEY=$(jq -r '.openrouter_mgmt_key // empty' "$CONFIG_FILE")
 OPENROUTER_KEY_HASH=$(jq -r '.openrouter_key_hash // empty' "$CONFIG_FILE")
 PLAN_SLUG=$(jq -r '.plan_slug // "starter"' "$CONFIG_FILE")
+DASHBOARD_EMAIL=$(jq -r '.dashboard_email // empty' "$CONFIG_FILE")
+RESEND_API_KEY=$(jq -r '.resend_api_key // empty' "$CONFIG_FILE")
 
 [ -z "$DASHBOARD_DOMAIN" ] && fail "dashboard_domain is required"
 [ -z "$DASHBOARD_USER" ] && fail "dashboard_user is required"
-[ -z "$DASHBOARD_PASSWORD" ] && fail "dashboard_password is required"
-[ ${#DASHBOARD_PASSWORD} -lt 8 ] && fail "dashboard_password must be at least 8 characters"
+# Password OR email required (magic link auth doesn't need password)
+if [ -z "$DASHBOARD_PASSWORD" ] && [ -z "$DASHBOARD_EMAIL" ]; then
+    fail "dashboard_password or dashboard_email is required"
+fi
+if [ -n "$DASHBOARD_PASSWORD" ] && [ ${#DASHBOARD_PASSWORD} -lt 8 ]; then
+    fail "dashboard_password must be at least 8 characters"
+fi
 [ -z "$RESTAURANT_NAME" ] && fail "restaurant_name is required"
 
 # Try to get gateway token from openclaw.env if not in config
@@ -154,6 +161,7 @@ APP_URL=https://$DASHBOARD_DOMAIN
 OPENROUTER_MANAGEMENT_KEY=$OPENROUTER_MGMT_KEY
 MISE_OPENROUTER_KEY_HASH=$OPENROUTER_KEY_HASH
 MISE_PLAN_SLUG=$PLAN_SLUG
+RESEND_API_KEY=$RESEND_API_KEY
 ENVEOF
 chmod 600 .env.local
 
@@ -161,57 +169,22 @@ npm ci --production=false 2>&1 | tail -3
 npm run build 2>&1 | tail -5
 ok "Dashboard built"
 
-step "Creating dashboard user"
-# Run the create-user script (ClawdOS includes one)
+step "Running database migrations"
 cd "$DASHBOARD_DIR"
-DATABASE_URL="$DATABASE_URL" node -e "
-const { Pool } = require('pg');
-const crypto = require('crypto');
+DATABASE_URL="$DATABASE_URL" node scripts/migrate.mjs 2>&1 || warn "Migrations may need manual review"
+ok "Migrations applied"
 
-async function createUser() {
-  const pool = new Pool({ connectionString: '$DATABASE_URL' });
-  
-  // Run migrations first
-  try {
-    const migrationsDir = require('path').join(__dirname, 'migrations');
-    const fs = require('fs');
-    if (fs.existsSync(migrationsDir)) {
-      const files = fs.readdirSync(migrationsDir).sort();
-      for (const f of files) {
-        if (f.endsWith('.sql')) {
-          const sql = fs.readFileSync(require('path').join(migrationsDir, f), 'utf8');
-          await pool.query(sql).catch(() => {});
-        }
-      }
-    }
-  } catch(e) { console.log('Migration note:', e.message); }
-  
-  // Create user with argon2 hash
-  const argon2 = require('argon2');
-  const hash = await argon2.hash('$DASHBOARD_PASSWORD');
-  const id = crypto.randomUUID();
-  
-  await pool.query(
-    'INSERT INTO users (id, username, password_hash) VALUES (\$1, \$2, \$3) ON CONFLICT (username) DO UPDATE SET password_hash = \$3',
-    [id, '$DASHBOARD_USER', hash]
-  );
-  
-  // Create default workspace
-  const wsId = crypto.randomUUID();
-  await pool.query(
-    'INSERT INTO workspaces (id, name, slug, owner_id) VALUES (\$1, \$2, \$3, \$4) ON CONFLICT DO NOTHING',
-    [wsId, '$RESTAURANT_NAME', 'mise', id]
-  );
-  await pool.query(
-    'INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (\$1, \$2, \$3) ON CONFLICT DO NOTHING',
-    [wsId, id, 'owner']
-  );
-  
-  await pool.end();
-  console.log('User created: $DASHBOARD_USER');
-}
-createUser().catch(e => { console.error(e.message); process.exit(1); });
-" 2>&1 || warn "User creation needs manual step after first run"
+step "Creating dashboard user"
+cd "$DASHBOARD_DIR"
+EMAIL_FLAG=""
+if [ -n "$DASHBOARD_EMAIL" ]; then
+    EMAIL_FLAG="--email $DASHBOARD_EMAIL"
+fi
+if [ -n "$DASHBOARD_PASSWORD" ]; then
+    DATABASE_URL="$DATABASE_URL" node scripts/create-user.mjs "$DASHBOARD_USER" "$DASHBOARD_PASSWORD" $EMAIL_FLAG 2>&1 || warn "User creation needs manual step"
+else
+    DATABASE_URL="$DATABASE_URL" node scripts/create-user.mjs "$DASHBOARD_USER" $EMAIL_FLAG 2>&1 || warn "User creation needs manual step"
+fi
 ok "Dashboard user configured"
 
 # ============================================================================
