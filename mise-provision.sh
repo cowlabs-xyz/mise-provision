@@ -47,7 +47,7 @@ NC='\033[0m' # No Color
 
 # Counters
 STEP=0
-TOTAL_STEPS=20
+TOTAL_STEPS=21
 
 step() {
     STEP=$((STEP + 1))
@@ -411,6 +411,18 @@ fi
 # ============================================================================
 # PHASE 1: SYSTEM SETUP
 # ============================================================================
+
+step "Configuring swap (2GB)"
+if swapon --show | grep -q '/swapfile'; then
+    ok "Swap already configured"
+else
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+    swapon /swapfile
+    echo "/swapfile swap swap defaults 0 0" >> /etc/fstab
+    ok "2GB swap enabled"
+fi
 
 step "Updating system packages"
 apt-get update -qq
