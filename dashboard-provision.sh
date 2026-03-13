@@ -129,18 +129,24 @@ DATABASE_URL="postgres://mise_dashboard:$DB_PASSWORD@localhost:5432/mise_dashboa
 step "Cloning Mise dashboard"
 DASHBOARD_DIR="/opt/mise-dashboard"
 
+# Set up deploy key for private repo access
+DEPLOY_KEY="/root/.ssh/mise_deploy_key"
+if [ -f "$DEPLOY_KEY" ]; then
+    export GIT_SSH_COMMAND="ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+fi
+
 if [ -d "$DASHBOARD_DIR" ]; then
-    cd "$DASHBOARD_DIR" && git pull origin mise/rebrand 2>/dev/null || true
+    cd "$DASHBOARD_DIR" && git pull origin main 2>/dev/null || true
     ok "Dashboard updated"
 else
-    git clone --branch mise/rebrand --depth 1 \
-        https://github.com/cowlabs-xyz/mise-dashboard.git "$DASHBOARD_DIR" 2>/dev/null || {
-        # Fallback: clone from hasanator3000/ClawdOS and checkout rebrand branch
+    if [ -f "$DEPLOY_KEY" ]; then
+        git clone --branch main --depth 1 \
+            git@github.com:cowlabs-xyz/mise-dashboard.git "$DASHBOARD_DIR"
+        ok "Dashboard cloned (private repo via deploy key)"
+    else
         git clone --depth 1 https://github.com/hasanator3000/ClawdOS.git "$DASHBOARD_DIR"
-        cd "$DASHBOARD_DIR"
-        warn "Using upstream ClawdOS (rebrand branch not available yet)"
-    }
-    ok "Dashboard cloned"
+        warn "No deploy key found — using upstream ClawdOS"
+    fi
 fi
 
 step "Installing dependencies and building"
